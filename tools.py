@@ -1,4 +1,5 @@
 import sys
+import xml.etree.ElementTree as ET
 from collections import deque
 from db import query, query_one
 
@@ -585,6 +586,77 @@ def register_tools(mcp) -> None:
             del r["_surname"]
 
         return results
+
+    @mcp.tool()
+    def get_home_person() -> dict:
+        """Return the full profile of the tree's designated home/root person.
+
+        Uses the RootPerson field stored in ConfigTable — no guesswork about IDs.
+        Returns the same structure as get_person(): person_id, sex, names, events.
+        Returns {} if no home person is configured or the person no longer exists."""
+        config = query_one(
+            "SELECT DataRec FROM ConfigTable WHERE RecType = 1 LIMIT 1"
+        )
+        if not config or not config.get("DataRec"):
+            return {}
+
+        try:
+            root = ET.fromstring(config["DataRec"])
+            rp_elem = root.find("RootPerson")
+            if rp_elem is None or not rp_elem.text:
+                return {}
+            home_person_id = int(rp_elem.text)
+        except (ET.ParseError, ValueError) as e:
+            print(f"get_home_person: failed to parse ConfigTable XML: {e}", file=sys.stderr)
+            return {}
+
+        if home_person_id == 0:
+            return {}
+
+        person = query_one("SELECT * FROM PersonTable WHERE PersonID = ?", (home_person_id,))
+        if not person:
+            return {}
+
+        names = query(
+            "SELECT Given, Surname, IsPrimary FROM NameTable WHERE OwnerID = ? ORDER BY IsPrimary DESC",
+            (home_person_id,),
+        )
+        name_list = [
+            {
+                "given": r["Given"] or "",
+                "surname": r["Surname"] or "",
+                "is_primary": bool(r["IsPrimary"]),
+            }
+            for r in names
+        ]
+
+        events_raw = query(
+            """
+            SELECT e.EventType, e.Date, e.Details, p.Name AS PlaceName
+            FROM EventTable e
+            LEFT JOIN PlaceTable p ON p.PlaceID = e.PlaceID AND e.PlaceID != 0
+            WHERE e.OwnerID = ? AND e.OwnerType = 0
+            ORDER BY e.SortDate
+            """,
+            (home_person_id,),
+        )
+        events = [
+            {
+                "event_type": r["EventType"],
+                "event_type_name": _event_type_names().get(r["EventType"], f"Event {r['EventType']}"),
+                "date": _format_date(r["Date"]),
+                "place": r["PlaceName"] or "",
+                "details": r["Details"] or "",
+            }
+            for r in events_raw
+        ]
+
+        return {
+            "person_id": home_person_id,
+            "sex": SEX_NAMES.get(person.get("Sex", 0), "Unknown"),
+            "names": name_list,
+            "events": events,
+        }
 
 
 def _ancestor_label(generation: int, sex: str) -> str:
