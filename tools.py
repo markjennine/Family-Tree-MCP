@@ -103,6 +103,64 @@ def _person_vitals(person_id: int) -> dict:
     }
 
 
+def _batch_person_vitals(person_ids: list[int]) -> dict[int, dict]:
+    """Batch-fetch birth/death vitals for multiple people in a single query."""
+    if not person_ids:
+        return {}
+    birth_type, death_type = _vital_fact_type_ids()
+    ph = ",".join("?" * len(person_ids))
+    rows = query(
+        f"""
+        SELECT e.OwnerID, e.EventType, e.Date, p.Name AS PlaceName
+        FROM EventTable e
+        LEFT JOIN PlaceTable p ON p.PlaceID = e.PlaceID AND e.PlaceID != 0
+        WHERE e.OwnerID IN ({ph}) AND e.OwnerType = 0 AND e.EventType IN (?, ?)
+        """,
+        (*person_ids, birth_type, death_type),
+    )
+    result: dict[int, dict] = {
+        pid: {"birth_date": None, "birth_place": None, "death_date": None, "death_place": None}
+        for pid in person_ids
+    }
+    for row in rows:
+        pid = row["OwnerID"]
+        formatted = _format_date(row["Date"]) or None
+        place = row["PlaceName"] or None
+        if row["EventType"] == birth_type:
+            result[pid]["birth_date"] = formatted
+            result[pid]["birth_place"] = place
+        elif row["EventType"] == death_type:
+            result[pid]["death_date"] = formatted
+            result[pid]["death_place"] = place
+    return result
+
+
+def _compute_people_stats(people: list[dict]) -> dict:
+    """Compute missing-vital counts for a collection of person dicts.
+
+    Expects each dict to have birth_date, birth_place, death_date, death_place keys
+    (values are None when not recorded).
+    """
+    total = len(people)
+    missing_birth_date = sum(1 for p in people if not p.get("birth_date"))
+    missing_death_date = sum(1 for p in people if not p.get("death_date"))
+    missing_birth_place = sum(1 for p in people if not p.get("birth_place"))
+    missing_death_place = sum(1 for p in people if not p.get("death_place"))
+    missing_any_vital = sum(
+        1 for p in people
+        if not p.get("birth_date") or not p.get("death_date")
+        or not p.get("birth_place") or not p.get("death_place")
+    )
+    return {
+        "total": total,
+        "missing_birth_date": missing_birth_date,
+        "missing_death_date": missing_death_date,
+        "missing_birth_place": missing_birth_place,
+        "missing_death_place": missing_death_place,
+        "missing_any_vital": missing_any_vital,
+    }
+
+
 def register_tools(mcp) -> None:
 
     @mcp.tool()
@@ -328,17 +386,29 @@ def register_tools(mcp) -> None:
                 if not any(c["person_id"] == cr["ChildID"] for c in children):
                     children.append(child_entry)
 
+        all_pids = list(dict.fromkeys(
+            [e["person_id"] for grp in (parents, siblings, children) for e in grp if e.get("person_id")]
+            + [s["person_id"] for s in spouses if s.get("person_id")]
+        ))
+        vitals_by_pid = _batch_person_vitals(all_pids)
+        stats = _compute_people_stats(list(vitals_by_pid.values()))
+
         return {
             "parents": parents,
             "siblings": siblings,
             "spouses": spouses,
             "children": children,
+            "stats": stats,
         }
 
     @mcp.tool()
-    def get_ancestors(person_id: int, generations: int = 4) -> list[dict]:
+    def get_ancestors(person_id: int, generations: int = 4) -> dict:
         """Walk up the family tree from a person, returning ancestors up to the specified number
         of generations (default 4, max 8). Generation 1 = parents, 2 = grandparents, etc.
+
+        Returns {"ancestors": [...], "stats": {...}} where stats summarises missing vital data
+        across the result set (total, missing_birth_date, missing_death_date,
+        missing_birth_place, missing_death_place, missing_any_vital).
 
         Each ancestor dict contains: person_id, name, generation, relationship,
         birth_date, birth_place, death_date, death_place. Vital fields are None when
@@ -387,12 +457,16 @@ def register_tools(mcp) -> None:
                 queue.append((pid, next_gen))
 
         results.sort(key=lambda r: (r["generation"], r["name"]))
-        return results
+        return {"ancestors": results, "stats": _compute_people_stats(results)}
 
     @mcp.tool()
-    def get_descendants(person_id: int, generations: int = 3) -> list[dict]:
+    def get_descendants(person_id: int, generations: int = 3) -> dict:
         """Walk down the family tree from a person, returning descendants up to the specified
-        number of generations (default 3, max 6). Generation 1 = children, 2 = grandchildren, etc."""
+        number of generations (default 3, max 6). Generation 1 = children, 2 = grandchildren, etc.
+
+        Returns {"descendants": [...], "stats": {...}} where stats summarises missing vital data
+        across the result set (total, missing_birth_date, missing_death_date,
+        missing_birth_place, missing_death_place, missing_any_vital)."""
         generations = min(generations, 6)
         visited: set[int] = {person_id}
         results: list[dict] = []
@@ -434,7 +508,7 @@ def register_tools(mcp) -> None:
                     queue.append((cid, next_gen))
 
         results.sort(key=lambda r: (r["generation"], r["name"]))
-        return results
+        return {"descendants": results, "stats": _compute_people_stats(results)}
 
     @mcp.tool()
     def get_timeline(person_id: int) -> list[dict]:
