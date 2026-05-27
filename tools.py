@@ -62,6 +62,36 @@ def _extract_year(date_str: str | None) -> int | None:
     return None
 
 
+def _person_vitals(person_id: int) -> dict:
+    """Return birth and death date/place for a person, all fields None if not recorded."""
+    rows = query(
+        """
+        SELECT e.EventType, e.Date, p.Name AS PlaceName
+        FROM EventTable e
+        LEFT JOIN PlaceTable p ON p.PlaceID = e.PlaceID AND e.PlaceID != 0
+        WHERE e.OwnerID = ? AND e.OwnerType = 0 AND e.EventType IN (1, 3)
+        """,
+        (person_id,),
+    )
+    birth_date: str | None = None
+    birth_place: str | None = None
+    death_date: str | None = None
+    death_place: str | None = None
+    for row in rows:
+        formatted = _format_date(row["Date"]) or None
+        place = row["PlaceName"] or None
+        if row["EventType"] == 1:
+            birth_date, birth_place = formatted, place
+        elif row["EventType"] == 3:
+            death_date, death_place = formatted, place
+    return {
+        "birth_date": birth_date,
+        "birth_place": birth_place,
+        "death_date": death_date,
+        "death_place": death_place,
+    }
+
+
 def register_tools(mcp) -> None:
 
     @mcp.tool()
@@ -225,7 +255,11 @@ def register_tools(mcp) -> None:
     @mcp.tool()
     def get_ancestors(person_id: int, generations: int = 4) -> list[dict]:
         """Walk up the family tree from a person, returning ancestors up to the specified number
-        of generations (default 4, max 8). Generation 1 = parents, 2 = grandparents, etc."""
+        of generations (default 4, max 8). Generation 1 = parents, 2 = grandparents, etc.
+
+        Each ancestor dict contains: person_id, name, generation, relationship,
+        birth_date, birth_place, death_date, death_place. Vital fields are None when
+        not recorded in the database."""
         generations = min(generations, 8)
         visited: set[int] = {person_id}
         results: list[dict] = []
@@ -254,12 +288,17 @@ def register_tools(mcp) -> None:
                 if not pid or pid == 0 or pid in visited:
                     continue
                 visited.add(pid)
+                vitals = _person_vitals(pid)
                 results.append(
                     {
                         "person_id": pid,
                         "name": _person_name(pid),
                         "generation": next_gen,
                         "relationship": _ancestor_label(next_gen, sex),
+                        "birth_date": vitals["birth_date"],
+                        "birth_place": vitals["birth_place"],
+                        "death_date": vitals["death_date"],
+                        "death_place": vitals["death_place"],
                     }
                 )
                 queue.append((pid, next_gen))
