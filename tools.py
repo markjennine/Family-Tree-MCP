@@ -191,6 +191,78 @@ def register_tools(mcp) -> None:
         }
 
     @mcp.tool()
+    def get_people(person_ids: list[int]) -> list[dict]:
+        """Get full profiles for multiple people in a single call. Accepts up to 500 person IDs
+        and returns full profiles (names, sex, personal events) using the same schema as get_person.
+        Ideal for bulk analysis after get_ancestors or get_descendants."""
+        if not person_ids:
+            return []
+
+        unique_ids = list(dict.fromkeys(person_ids))[:500]
+        ph = ",".join("?" * len(unique_ids))
+
+        persons = query(
+            f"SELECT PersonID, Sex FROM PersonTable WHERE PersonID IN ({ph})",
+            tuple(unique_ids),
+        )
+        if not persons:
+            return []
+
+        found_ids = [p["PersonID"] for p in persons]
+        person_sex = {p["PersonID"]: p["Sex"] for p in persons}
+        fph = ",".join("?" * len(found_ids))
+
+        names_rows = query(
+            f"SELECT OwnerID, Given, Surname, IsPrimary FROM NameTable WHERE OwnerID IN ({fph}) ORDER BY IsPrimary DESC",
+            tuple(found_ids),
+        )
+        events_rows = query(
+            f"""
+            SELECT e.OwnerID, e.EventType, e.Date, e.Details, p.Name AS PlaceName
+            FROM EventTable e
+            LEFT JOIN PlaceTable p ON p.PlaceID = e.PlaceID AND e.PlaceID != 0
+            WHERE e.OwnerID IN ({fph}) AND e.OwnerType = 0
+            ORDER BY e.OwnerID, e.SortDate
+            """,
+            tuple(found_ids),
+        )
+
+        names_by_person: dict[int, list[dict]] = {pid: [] for pid in found_ids}
+        for r in names_rows:
+            names_by_person[r["OwnerID"]].append(
+                {
+                    "given": r["Given"] or "",
+                    "surname": r["Surname"] or "",
+                    "is_primary": bool(r["IsPrimary"]),
+                }
+            )
+
+        events_by_person: dict[int, list[dict]] = {pid: [] for pid in found_ids}
+        for r in events_rows:
+            events_by_person[r["OwnerID"]].append(
+                {
+                    "event_type": r["EventType"],
+                    "event_type_name": _event_type_names().get(r["EventType"], f"Event {r['EventType']}"),
+                    "date": _format_date(r["Date"]),
+                    "place": r["PlaceName"] or "",
+                    "details": r["Details"] or "",
+                }
+            )
+
+        id_order = {pid: i for i, pid in enumerate(unique_ids)}
+        results = [
+            {
+                "person_id": pid,
+                "sex": SEX_NAMES.get(person_sex.get(pid, 0), "Unknown"),
+                "names": names_by_person.get(pid, []),
+                "events": events_by_person.get(pid, []),
+            }
+            for pid in found_ids
+        ]
+        results.sort(key=lambda r: id_order.get(r["person_id"], 0))
+        return results
+
+    @mcp.tool()
     def get_family(person_id: int) -> dict:
         """Get family relationships for a person: parents, siblings, spouses, and children."""
         parents: list[dict] = []
