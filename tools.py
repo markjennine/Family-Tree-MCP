@@ -62,16 +62,26 @@ def _extract_year(date_str: str | None) -> int | None:
     return None
 
 
+def _vital_fact_type_ids() -> tuple[int, int]:
+    """Return (birth_type_id, death_type_id) by looking up names in the already-cached
+    FactTypeTable mapping. Falls back to 1 / 3 when the table is unavailable."""
+    names = _event_type_names()  # {FactTypeID: Name}
+    birth_id = next((tid for tid, n in names.items() if n.lower() == "birth"), 1)
+    death_id = next((tid for tid, n in names.items() if n.lower() == "death"), 3)
+    return birth_id, death_id
+
+
 def _person_vitals(person_id: int) -> dict:
     """Return birth and death date/place for a person, all fields None if not recorded."""
+    birth_type, death_type = _vital_fact_type_ids()
     rows = query(
         """
         SELECT e.EventType, e.Date, p.Name AS PlaceName
         FROM EventTable e
         LEFT JOIN PlaceTable p ON p.PlaceID = e.PlaceID AND e.PlaceID != 0
-        WHERE e.OwnerID = ? AND e.OwnerType = 0 AND e.EventType IN (1, 3)
+        WHERE e.OwnerID = ? AND e.OwnerType = 0 AND e.EventType IN (?, ?)
         """,
-        (person_id,),
+        (person_id, birth_type, death_type),
     )
     birth_date: str | None = None
     birth_place: str | None = None
@@ -80,9 +90,9 @@ def _person_vitals(person_id: int) -> dict:
     for row in rows:
         formatted = _format_date(row["Date"]) or None
         place = row["PlaceName"] or None
-        if row["EventType"] == 1:
+        if row["EventType"] == birth_type:
             birth_date, birth_place = formatted, place
-        elif row["EventType"] == 3:
+        elif row["EventType"] == death_type:
             death_date, death_place = formatted, place
     return {
         "birth_date": birth_date,
@@ -335,12 +345,17 @@ def register_tools(mcp) -> None:
                         continue
                     visited.add(cid)
                     next_gen = depth + 1
+                    vitals = _person_vitals(cid)
                     results.append(
                         {
                             "person_id": cid,
                             "name": _person_name(cid),
                             "generation": next_gen,
                             "relationship": _descendant_label(next_gen),
+                            "birth_date": vitals["birth_date"],
+                            "birth_place": vitals["birth_place"],
+                            "death_date": vitals["death_date"],
+                            "death_place": vitals["death_place"],
                         }
                     )
                     queue.append((cid, next_gen))
