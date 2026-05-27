@@ -658,6 +658,94 @@ def register_tools(mcp) -> None:
             "events": events,
         }
 
+    @mcp.tool()
+    def search_events(
+        event_type: str,
+        has_place: bool | None = None,
+        place_contains: str | None = None,
+        person_ids: list[int] | None = None,
+    ) -> list[dict]:
+        """Search across all people by event type with optional place filters.
+
+        event_type: name of the event, e.g. "Birth", "Death", "Marriage", "Census"
+        has_place: True = only events with a recorded location; False = events missing a location
+        place_contains: partial place name to match (case-insensitive substring)
+        person_ids: if provided, restrict search to these people only
+
+        Returns up to 200 results: [{person_id, name, event_type, event_type_name, date, place}]
+
+        Examples:
+          search_events("Death", has_place=True)            — all people with a recorded death location
+          search_events("Birth", place_contains="Scotland") — all people born in Scotland
+          search_events("Death", has_place=False)           — all people missing a death location
+        """
+        names_cache = _event_type_names()
+        event_type_lower = event_type.strip().lower()
+        type_id = next((tid for tid, n in names_cache.items() if n.lower() == event_type_lower), None)
+        if type_id is None:
+            return []
+
+        conditions = ["e.OwnerType = 0", "e.EventType = ?"]
+        params: list = [type_id]
+
+        if has_place is True:
+            conditions.append("e.PlaceID != 0")
+        elif has_place is False:
+            conditions.append("e.PlaceID = 0")
+
+        if place_contains:
+            conditions.append("pl.Name LIKE ?")
+            params.append(f"%{place_contains}%")
+
+        if person_ids:
+            ph = ",".join("?" * len(person_ids))
+            conditions.append(f"e.OwnerID IN ({ph})")
+            params.extend(person_ids)
+
+        # INNER JOIN when we need place data to exist; LEFT JOIN otherwise
+        pl_join = "JOIN" if (has_place is True or place_contains) else "LEFT JOIN"
+        where = " AND ".join(conditions)
+
+        rows = query(
+            f"""
+            SELECT e.OwnerID AS PersonID, e.EventType, e.Date, pl.Name AS PlaceName
+            FROM EventTable e
+            {pl_join} PlaceTable pl ON pl.PlaceID = e.PlaceID AND e.PlaceID != 0
+            WHERE {where}
+            ORDER BY e.SortDate
+            LIMIT 200
+            """,
+            tuple(params),
+        )
+
+        if not rows:
+            return []
+
+        # Batch-load names to avoid N+1 queries
+        found_pids = list(dict.fromkeys(r["PersonID"] for r in rows))
+        name_ph = ",".join("?" * len(found_pids))
+        name_rows = query(
+            f"SELECT OwnerID, Given, Surname FROM NameTable WHERE OwnerID IN ({name_ph}) AND IsPrimary = 1",
+            tuple(found_pids),
+        )
+        person_name_map: dict[int, str] = {}
+        for nr in name_rows:
+            given = nr["Given"] or ""
+            surname = nr["Surname"] or ""
+            person_name_map[nr["OwnerID"]] = f"{given} {surname}".strip() or "Unknown"
+
+        return [
+            {
+                "person_id": r["PersonID"],
+                "name": person_name_map.get(r["PersonID"], "Unknown"),
+                "event_type": r["EventType"],
+                "event_type_name": names_cache.get(r["EventType"], f"Event {r['EventType']}"),
+                "date": _format_date(r["Date"]),
+                "place": r["PlaceName"] or "",
+            }
+            for r in rows
+        ]
+
 
 def _ancestor_label(generation: int, sex: str) -> str:
     match generation:
