@@ -19,7 +19,7 @@ def _event_type_names() -> dict[int, str]:
     return _EVENT_TYPE_NAMES
 
 
-SEX_NAMES: dict[int, str] = {0: "Unknown", 1: "Male", 2: "Female"}
+SEX_NAMES: dict[int, str] = {0: "Male", 1: "Female", 2: "Unknown"}
 
 
 def _person_name(person_id: int) -> str:
