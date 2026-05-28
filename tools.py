@@ -139,7 +139,8 @@ def _compute_people_stats(people: list[dict]) -> dict:
     """Compute missing-vital counts for a collection of person dicts.
 
     Expects each dict to have birth_date, birth_place, death_date, death_place keys
-    (values are None when not recorded).
+    (values are None when not recorded). When a sex key is present, also counts
+    missing_sex (people where sex is "Unknown").
     """
     total = len(people)
     missing_birth_date = sum(1 for p in people if not p.get("birth_date"))
@@ -151,7 +152,7 @@ def _compute_people_stats(people: list[dict]) -> dict:
         if not p.get("birth_date") or not p.get("death_date")
         or not p.get("birth_place") or not p.get("death_place")
     )
-    return {
+    stats = {
         "total": total,
         "missing_birth_date": missing_birth_date,
         "missing_death_date": missing_death_date,
@@ -159,6 +160,9 @@ def _compute_people_stats(people: list[dict]) -> dict:
         "missing_death_place": missing_death_place,
         "missing_any_vital": missing_any_vital,
     }
+    if people and "sex" in people[0]:
+        stats["missing_sex"] = sum(1 for p in people if p.get("sex") == "Unknown")
+    return stats
 
 
 def register_tools(mcp) -> None:
@@ -408,11 +412,11 @@ def register_tools(mcp) -> None:
 
         Returns {"ancestors": [...], "stats": {...}} where stats summarises missing vital data
         across the result set (total, missing_birth_date, missing_death_date,
-        missing_birth_place, missing_death_place, missing_any_vital).
+        missing_birth_place, missing_death_place, missing_sex, missing_any_vital).
 
-        Each ancestor dict contains: person_id, name, generation, relationship,
+        Each ancestor dict contains: person_id, name, sex, generation, relationship,
         birth_date, birth_place, death_date, death_place. Vital fields are None when
-        not recorded in the database."""
+        not recorded in the database. sex is "Unknown" when not recorded."""
         generations = min(generations, 8)
         visited: set[int] = {person_id}
         results: list[dict] = []
@@ -456,6 +460,17 @@ def register_tools(mcp) -> None:
                 )
                 queue.append((pid, next_gen))
 
+        if results:
+            all_ids = [r["person_id"] for r in results]
+            ph = ",".join("?" * len(all_ids))
+            sex_rows = query(
+                f"SELECT PersonID, Sex FROM PersonTable WHERE PersonID IN ({ph})",
+                tuple(all_ids),
+            )
+            sex_by_id = {row["PersonID"]: SEX_NAMES.get(row["Sex"], "Unknown") for row in sex_rows}
+            for r in results:
+                r["sex"] = sex_by_id.get(r["person_id"], "Unknown")
+
         results.sort(key=lambda r: (r["generation"], r["name"]))
         return {"ancestors": results, "stats": _compute_people_stats(results)}
 
@@ -466,7 +481,10 @@ def register_tools(mcp) -> None:
 
         Returns {"descendants": [...], "stats": {...}} where stats summarises missing vital data
         across the result set (total, missing_birth_date, missing_death_date,
-        missing_birth_place, missing_death_place, missing_any_vital)."""
+        missing_birth_place, missing_death_place, missing_sex, missing_any_vital).
+
+        Each descendant dict contains: person_id, name, sex, generation, relationship,
+        birth_date, birth_place, death_date, death_place. sex is "Unknown" when not recorded."""
         generations = min(generations, 6)
         visited: set[int] = {person_id}
         results: list[dict] = []
@@ -506,6 +524,17 @@ def register_tools(mcp) -> None:
                         }
                     )
                     queue.append((cid, next_gen))
+
+        if results:
+            all_ids = [r["person_id"] for r in results]
+            ph = ",".join("?" * len(all_ids))
+            sex_rows = query(
+                f"SELECT PersonID, Sex FROM PersonTable WHERE PersonID IN ({ph})",
+                tuple(all_ids),
+            )
+            sex_by_id = {row["PersonID"]: SEX_NAMES.get(row["Sex"], "Unknown") for row in sex_rows}
+            for r in results:
+                r["sex"] = sex_by_id.get(r["person_id"], "Unknown")
 
         results.sort(key=lambda r: (r["generation"], r["name"]))
         return {"descendants": results, "stats": _compute_people_stats(results)}
