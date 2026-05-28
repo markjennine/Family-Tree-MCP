@@ -411,12 +411,15 @@ def register_tools(mcp) -> None:
         missing_birth_place, missing_death_place, missing_any_vital).
 
         Each ancestor dict contains: person_id, name, generation, relationship,
-        birth_date, birth_place, death_date, death_place. Vital fields are None when
-        not recorded in the database."""
+        birth_date, birth_place, death_date, death_place, parent_ids. Vital fields are None
+        when not recorded in the database. parent_ids lists the person_id values of that
+        ancestor's parents where those parents are also present in the result set — making
+        the inter-ancestor relationships self-describing without additional tool calls."""
         generations = min(generations, 8)
         visited: set[int] = {person_id}
         results: list[dict] = []
         queue: deque[tuple[int, int]] = deque([(person_id, 0)])
+        parent_map: dict[int, list[int]] = {}  # person_id -> their parent IDs found in BFS
 
         while queue:
             current_id, depth = queue.popleft()
@@ -435,6 +438,10 @@ def register_tools(mcp) -> None:
             )
             if not origin:
                 continue
+
+            raw_parents = [p for p in [origin["FatherID"], origin["MotherID"]] if p and p != 0]
+            if raw_parents:
+                parent_map[current_id] = raw_parents
 
             next_gen = depth + 1
             for pid, sex in [(origin["FatherID"], "Father"), (origin["MotherID"], "Mother")]:
@@ -455,6 +462,10 @@ def register_tools(mcp) -> None:
                     }
                 )
                 queue.append((pid, next_gen))
+
+        result_ids = {r["person_id"] for r in results}
+        for r in results:
+            r["parent_ids"] = [p for p in parent_map.get(r["person_id"], []) if p in result_ids]
 
         results.sort(key=lambda r: (r["generation"], r["name"]))
         return {"ancestors": results, "stats": _compute_people_stats(results)}
