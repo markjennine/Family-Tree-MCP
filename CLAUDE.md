@@ -38,7 +38,7 @@ Always use these exact table and column names:
 ### PersonTable
 ```sql
 PersonID    INTEGER PRIMARY KEY
-Sex         INTEGER  -- 0=unknown, 1=male, 2=female
+Sex         INTEGER  -- 0=male, 1=female, 2=unknown
 ParentID    INTEGER  -- FamilyID where this person is a child (not a PersonID)
 SpouseID    INTEGER  -- FamilyID of first spouse family (not a PersonID)
 ```
