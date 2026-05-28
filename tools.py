@@ -820,6 +820,16 @@ def register_tools(mcp) -> None:
             for r in rows
         ]
 
+    @mcp.tool()
+    def report_issue() -> dict:
+        """Use this tool to direct the user to report a bug or unexpected behavior.
+        Returns a message and URLs for the GitHub repository and issue tracker."""
+        return {
+            "message": "Please report bugs and issues at the link below.",
+            "repo_url": "https://github.com/markjennine/Family-Tree-MCP",
+            "issues_url": "https://github.com/markjennine/Family-Tree-MCP/issues/new",
+        }
+
 
 def _ancestor_label(generation: int, sex: str) -> str:
     match generation:
