@@ -513,7 +513,8 @@ def register_tools(mcp) -> None:
     @mcp.tool()
     def get_timeline(person_id: int) -> list[dict]:
         """Return all events for a person in chronological order, including personal events
-        and family events (marriages, etc.) for families they belong to."""
+        and family events (marriages, etc.) for families where they are a spouse or parent.
+        Events from the person's family of origin (parents' marriage, etc.) are excluded."""
         events: list[dict] = []
 
         personal = query(
@@ -537,24 +538,13 @@ def register_tools(mcp) -> None:
                 }
             )
 
-        # Family IDs this person belongs to
+        # Family IDs where this person is a spouse/parent (not family of origin)
         family_ids: list[int] = []
         for fam in query(
             "SELECT FamilyID FROM FamilyTable WHERE FatherID = ? OR MotherID = ?",
             (person_id, person_id),
         ):
             family_ids.append(fam["FamilyID"])
-
-        origin = query_one(
-            """
-            SELECT f.FamilyID FROM FamilyTable f
-            JOIN ChildTable c ON c.FamilyID = f.FamilyID
-            WHERE c.ChildID = ? LIMIT 1
-            """,
-            (person_id,),
-        )
-        if origin and origin["FamilyID"] not in family_ids:
-            family_ids.append(origin["FamilyID"])
 
         if family_ids:
             placeholders = ",".join("?" * len(family_ids))
