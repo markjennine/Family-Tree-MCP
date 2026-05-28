@@ -415,10 +415,10 @@ def register_tools(mcp) -> None:
         missing_birth_place, missing_death_place, missing_sex, missing_any_vital).
 
         Each ancestor dict contains: person_id, name, sex, generation, relationship,
-        birth_date, birth_place, death_date, death_place, parent_ids. Vital fields are None
-        when not recorded in the database. sex is "Unknown" when not recorded. parent_ids
-        lists the person_id values of that ancestor's parents where those parents are also
-        present in the result set — making inter-ancestor relationships self-describing
+        birth_date, birth_place, death_date, death_place, parent_ids, spouse_ids. Vital
+        fields are None when not recorded in the database. sex is "Unknown" when not
+        recorded. parent_ids and spouse_ids list person_id values of parents/spouses that
+        are also present in the result set — making the full family structure self-describing
         without additional tool calls."""
         generations = min(generations, 8)
         visited: set[int] = {person_id}
@@ -471,6 +471,25 @@ def register_tools(mcp) -> None:
         result_ids = {r["person_id"] for r in results}
         for r in results:
             r["parent_ids"] = [p for p in parent_map.get(r["person_id"], []) if p in result_ids]
+
+        spouse_map: dict[int, list[int]] = {pid: [] for pid in result_ids}
+        if result_ids:
+            ph = ",".join("?" * len(result_ids))
+            fam_rows = query(
+                f"SELECT FatherID, MotherID FROM FamilyTable WHERE FatherID IN ({ph}) OR MotherID IN ({ph})",
+                (*result_ids, *result_ids),
+            )
+            for fam in fam_rows:
+                f_id, m_id = fam["FatherID"], fam["MotherID"]
+                if f_id and f_id != 0 and m_id and m_id != 0:
+                    if f_id in result_ids and m_id in result_ids:
+                        if m_id not in spouse_map[f_id]:
+                            spouse_map[f_id].append(m_id)
+                        if f_id not in spouse_map[m_id]:
+                            spouse_map[m_id].append(f_id)
+
+        for r in results:
+            r["spouse_ids"] = spouse_map.get(r["person_id"], [])
 
         if results:
             all_ids = [r["person_id"] for r in results]
